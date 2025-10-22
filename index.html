@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Cesium VR Test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- CesiumJS -->
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Cesium.js"></script>
+
+  <style>
+    html, body, #cesiumContainer {
+      height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden;
+      font-family: sans-serif;
+    }
+    #overlay {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255,255,255,0.9);
+      padding: 8px 12px;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      max-width: 300px;
+      font-size: 13px;
+    }
+    button {
+      margin-top: 4px;
+      padding: 4px 8px;
+    }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+  <div id="overlay">
+    <strong>Cesium VR Test</strong>
+    <div id="status">Initializing...</div>
+    <button id="vrButton">Enter VR</button>
+  </div>
+
+<script>
+(async function() {
+  Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIzMmFhMjEwNy0wMzg2LTQ2YjctYTQzYS01NDRjYTIzOGQzZWEiLCJpZCI6MzUwMzY5LCJpYXQiOjE3NjA1MzY2OTd9.qE1UEvuWZ8zE-L18UevG-KvhGx8HDR6nCJCuJpYAQBA";
+
+  const viewer = new Cesium.Viewer('cesiumContainer', {
+    terrainProvider: await Cesium.createWorldTerrainAsync(),
+    timeline: false,
+    animation: false,
+    baseLayerPicker: true,
+    selectionIndicator: false,
+  });
+
+  // Add OSM buildings
+  const osmBuildings = viewer.scene.primitives.add(
+    await Cesium.createOsmBuildingsAsync()
+  );
+
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = 'Scene loaded';
+
+  // --- VR Setup (using cesium-webxr integration pattern) ---
+  const xrButton = document.getElementById('vrButton');
+
+  // Feature-detect WebXR
+  if (!navigator.xr) {
+    xrButton.disabled = true;
+    statusEl.textContent = 'WebXR not supported in this browser';
+    return;
+  }
+
+  // Enable Cesium to use WebXR-specific code paths
+  viewer.scene.useWebXR = true;
+
+  xrButton.disabled = false;
+  let xrSession = null;
+
+  async function onXRFrame(time, xrFrame) {
+    // Update Cesium's webXRContext each frame
+    viewer.scene.webXRContext.frame = xrFrame;
+    // Render the scene (Cesium will read webXRContext.frame/refSpace)
+    viewer.scene.render();
+    // Queue the next XR frame
+    xrSession.requestAnimationFrame(onXRFrame);
+  }
+
+  async function startXR() {
+    try {
+      xrSession = await navigator.xr.requestSession('immersive-vr', {
+        optionalFeatures: ['local-floor', 'bounded-floor'],
+      });
+
+      // Create the WebGL layer using Cesium's GL context so rendering can target the XR device.
+      const gl = viewer.scene.context._gl;
+      // Some browsers require the XR-compatible context; ensure the canvas is compatible
+      await gl.makeXRCompatible?.();
+
+      xrSession.updateRenderState({
+        baseLayer: new XRWebGLLayer(xrSession, gl),
+      });
+
+      // Prepare the webXRContext object Cesium expects
+      viewer.scene.webXRContext = { refSpace: undefined, frame: undefined };
+      // Request a reference space and start the XR render loop
+      const xrRefSpace = await xrSession.requestReferenceSpace('local-floor');
+      viewer.scene.webXRContext.refSpace = xrRefSpace;
+
+      // Handle session end
+      xrSession.addEventListener('end', () => {
+        viewer.scene.webXRContext = undefined;
+        xrSession = null;
+        xrButton.textContent = 'Enter VR';
+        statusEl.textContent = 'Exited VR';
+      });
+
+      xrButton.textContent = 'Exit VR';
+      statusEl.textContent = 'Entering VR...';
+
+      // Start the XR animation loop
+      xrSession.requestAnimationFrame(onXRFrame);
+      statusEl.textContent = 'In VR mode';
+    } catch (err) {
+      console.error('Failed to start XR session', err);
+      statusEl.textContent = 'VR session failed';
+    }
+  }
+
+  xrButton.addEventListener('click', async () => {
+    if (xrSession) {
+      await xrSession.end();
+      return;
+    }
+    await startXR();
+  });
+
+})();
+</script>
+</body>
+</html>
