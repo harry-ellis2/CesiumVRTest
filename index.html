@@ -77,12 +77,43 @@
   let xrSession = null;
 
   async function onXRFrame(time, xrFrame) {
-    // Update Cesium's webXRContext each frame
-    viewer.scene.webXRContext.frame = xrFrame;
-    // Render the scene (Cesium will read webXRContext.frame/refSpace)
-    viewer.scene.render();
-    // Queue the next XR frame
-    xrSession.requestAnimationFrame(onXRFrame);
+    try {
+      // Update Cesium's webXRContext each frame
+      viewer.scene.webXRContext.frame = xrFrame;
+
+      // If the XR session provided a baseLayer with a framebuffer, bind it so
+      // rendering targets the HMD directly. Some emulators don't provide a
+      // framebuffer, in which case Cesium will fall back to blitting.
+      const xrLayer = xrFrame.session.renderState.baseLayer;
+      const gl = viewer.scene.context._gl;
+      if (xrLayer && xrLayer.framebuffer) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, xrLayer.framebuffer);
+        // Set viewport to cover the XR layer framebuffer
+        try {
+          gl.viewport(0, 0, xrLayer.framebufferWidth, xrLayer.framebufferHeight);
+        } catch (e) {
+          // Ignore viewport errors and proceed; some environments may not allow manual viewport.
+        }
+      }
+
+      // Render the scene (Cesium will read webXRContext.frame/refSpace)
+      viewer.scene.render();
+
+      // Unbind the XR framebuffer to be safe
+      if (xrLayer && xrLayer.framebuffer) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+
+      // Queue the next XR frame
+      xrSession.requestAnimationFrame(onXRFrame);
+    } catch (err) {
+      console.error('Error during XR frame', err);
+      try {
+        xrSession.requestAnimationFrame(onXRFrame);
+      } catch (e) {
+        // ignore
+      }
+    }
   }
 
   async function startXR() {
@@ -102,6 +133,8 @@
 
       // Prepare the webXRContext object Cesium expects
       viewer.scene.webXRContext = { refSpace: undefined, frame: undefined };
+  // Tell Cesium to use its WebVR rendering path (stereoscopic / bitblit)
+  viewer.scene.useWebVR = true;
       // Request a reference space and start the XR render loop
       const xrRefSpace = await xrSession.requestReferenceSpace('local-floor');
       viewer.scene.webXRContext.refSpace = xrRefSpace;
@@ -109,6 +142,7 @@
       // Handle session end
       xrSession.addEventListener('end', () => {
         viewer.scene.webXRContext = undefined;
+        viewer.scene.useWebVR = false;
         xrSession = null;
         xrButton.textContent = 'Enter VR';
         statusEl.textContent = 'Exited VR';
